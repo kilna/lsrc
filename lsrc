@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 
 _lsrc_fail() {
   export _lsrc_err="${1:-$_lsrc_action failed}"
@@ -47,7 +47,7 @@ else
 fi
 
 _lsrc_log "action: $_lsrc_action"
-_lsrc_log "eval: $_lsrc_eval"
+_lsrc_log "eval: $(_lsrc_eval)"
 _lsrc_log "source: $_lsrc_source"
 
 export _lsrc_url="https://githubraw.com/kilna/lsrc/main/install.sh"
@@ -87,27 +87,37 @@ _lsrc_warn() {
 _lsrc_load() {
   # Load the ls function into the shell
   _lsrc_warn
-  cat <<'EOF'
+  echo '
 
+echo "Got here 1"
 lsrc() { . "${LSRC_BIN:-$HOME/.local/bin}/lsrc" "$@"; };
 
+# Find where ls is coming from
+_lsrc_orig_ls="$(which ls || whereis -q ls || /bin/ls)"
 # Use gls instead of ls if available
-_lsrc_ls=/bin/ls
-if gls >/dev/null 2>&1; then ls=gls; done
+_lsrc_ls="$(which gls || whereis -q gls || $ls_orig_ls)"
 
-if [ "$($_lsrc_ls --version 2>/dev/null)" == *GNU*) ]; then
+echo "Got here 2"
+
+if ! ($_lsrc_ls --version 2>/dev/null | grep -q GNU); then
+  echo "lsrc: \`$_lsrc_ls\` is not GNU ls, skipping loading of ls function"
+elif ! _lsrc_opts="$(lsrc opts)"; then
+  echo "lsrc: failed processing lsrc config"
+else
+  echo "Got here 3"
   eval "ls() {
     # Only use GNU ls options from $HOME/.lsrc in interactive shell
-    if [ -t 1 ]; then $_lsrc_ls $(lsrc opts) \"$@\"
-    else; /bin/ls \"$@\"; fi
+    if [ -t 1 ]; then
+      $_lsrc_ls $_lsrc_opts "$@"
+    else
+      $_lsrc_orig_ls "$@"
+    fi
   };"
-else
-  echo "lsrc: \`ls\` is not GNU ls, skipping loading of ls function"
 fi
+echo "Got here 4"
 
-unset _lsrc_ls
-
-EOF
+unset _lsrc_orig_ls _lsrc_ls _lsrc_opts
+'
 }
 
 _lsrc_unload() {
@@ -241,106 +251,104 @@ EOF
 }
 
 _lsrc_config() {
-  _lsrc_defaults
-  if ! [ -r "$HOME/.config/lsrc/lsrc.cfg" || -r "$HOME/.lsrc"
+  if ! [ -r "$HOME/.config/lsrc/lsrc.cfg" ] && ! [ -r "$HOME/.lsrc" ]; then
     echo "Unable to load $HOME/.config/lsrc/lsrc.cfg nor" >&2
     echo "  $HOME/.lsrc ... you probably want to do an lsrc install again" >&2
     return 1
   fi
-  cat $HOME/.config/lsrc/lsrc.cfg 2>/dev/null || true
-  cat $HOME/.lsrc                 2>/dev/null || true
+  cat $HOME/.config/lsrc/lsrc.cfg cat $HOME/.lsrc 2>/dev/null \
+    | sed -e 's/#.*//' | grep -v '^$'
 }
 
 _lsrc_on() {
   [ "$2" == 'on' ] && return 0
   [ "$2" == 'off' ] && return 1
-  echo "Unknown value '$2' for lsrc configuration '$1'" >&2
+  _lsrc_opt_error "$@"
+}
+
+_lsrc_opt_err() {
+  echo "Invalid value '$2' for lsrc configuration '$1'" >&2
   return 1; # Default to off
 }
 
 _lsrc_opts() {
+  local flags=''
   while IFS='' read -r line; do
     set -- $line
-    local flags=''
     case "$1" in
       all)
-        case "$1" in
+        case "$2" in
           off)    :;;
-          on)     flags="${flag}a";;
-          almost) flags="${flag}A";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+          on)     flags="${flags}a";;
+          almost) flags="${flags}A";;
+          *)      _lsrc_opt_err "$@";;
         esac;;
       human-readible)
-        case "$1" in
+        case "$2" in
           off) :;;
-          on)  flags="${flag}";;
-          si)  echo ' --si';;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+          on)  flags="${flags}";;
+          si)  echo -n ' --si';;
+          *)   _lsrc_opt_err "$@";;
         esac;;
       control-characters)
-        case "$1" in
-          hide)  flags="${flag}w";;
-          show)  echo ' --show-control-chars';;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        case "$2" in
+          hide)  flags="${flags}w";;
+          show)  echo -n ' --show-control-chars';;
+          *)      _lsrc_opt_err "$@";;
         esac;;
       sort)
-        case "$1" in
-          size)      flags="${flag}S";;
-          time)      flags="${flag}t";;
-          version)   flags="${flag}v";;
-          extension) flags="${flag}X";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        case "$2" in
+          size)      flags="${flags}S";;
+          time)      flags="${flags}t";;
+          version)   flags="${flags}v";;
+          extension) flags="${flags}X";;
+          *)         _lsrc_opt_err "$@";;
         esac;;
       time)
         case "$2" in
           atime|acces|use)    flags="${flags}u";;
           ctime|status)       flags="${flags}c";;
           mtime|modification) flags="${flags}m";;
-          birth|creation)     echo " --time=$2";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+          birth|creation)     echo -n " --time=$2";;
+          *)                  _lsrc_opt_err "$@";;
         esac;;
       color|hyperlink)
         case "$2" in
-          always|never|auto) echo " --$1=$2";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+          always|never|auto) echo -n " --$1=$2";;
+          *)                 _lsrc_opt_err "$@";;
         esac;;
       format)
         case "$2" in
-          across|horizontal) _flags="${flags}x";;
-          long|verbose)      _flags="${flags}l";;
-          single-column)     _flags="${flags}1";;
-          vertical)          _flags="${flags}C";;
-          commas)            _flags="${flags}m";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+          across|horizontal) flags="${flags}x";;
+          long|verbose)      flags="${flags}l";;
+          single-column)     flags="${flags}1";;
+          vertical)          flags="${flags}C";;
+          commas)            flags="${flags}m";;
+          *)                 _lsrc_opt_err "$@";;
         esac;;
       tabsize|width)
         case "$2" in
-          [0-9]+) echo " --$1=$2";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
-        esac;;
-      block-size)
-        case "$2" in
-          [KMGTPEZYRQ][i]?[B]?) echo " --$1=$2";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+          ''|*[!0-9]*) _lsrc_opt_err "$@";;
+          *)           echo -n " --$1=$2";;
         esac;;
       indicator-style)
         case "$2" in
           none)      :;;
-          slash)     _flags="${flags}p";;
-          file-type) _flags="${flags}p";;
-          classify)  _flags="${flags}F";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+          slash)     flags="${flags}p";;
+          classify)  flags="${flags}F";;
+          file-type) echo -n ' --file-type';;
+          *)         _lsrc_opt_err "$@";;
         esac;;
       quoting-style)
         case "$2" in
           literal|locale|shell|shell-always|shell-escape|shell-escape-always|c|escape)
-            echo " --$1=$2";;
-          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+            echo -n " --$1=$2";;
+          *) _lsrc_opt_err "$@";;
         esac;;
-      hide|ignore|time-style)
-        echo " --$1='$2'";;
+      block-size|hide|ignore|time-style)
+        echo -n " --$1='$2'";;
       author|full-time|group-directories-first|dereference-command-line-symlink-to-dir|zero)
-        _lsrc_on "$@" && echo " --$1";;
+        _lsrc_on "$@" && echo -n " --$1";;
       escape)                   _lsrc_on "$@" && flags="${flags}b";;
       ignore-backups)           _lsrc_on "$@" && flags="${flags}B";;
       columns)                  _lsrc_on "$@" && flags="${flags}C";;
@@ -361,9 +369,11 @@ _lsrc_opts() {
       recursive)                _lsrc_on "$@" && flags="${flags}R";;
       size)                     _lsrc_on "$@" && flags="${flags}s";;
       context)                  _lsrc_on "$@" && flags="${flags}Z";;
+      *)                        echo "Unknown lsrc configuration '$1'" >&2 ;;
     esac
-    [ "$flags" != '' ] && echo echo " -$flags"
-  done < <(lsrc_config | sed -e 's/#.*//; s/\-+//')
+  done < <(_lsrc_config)
+  if [ "$flags" != '' ]; then echo -n " -$flags"; fi
+  echo
 }
 
 case "$_lsrc_action" in
