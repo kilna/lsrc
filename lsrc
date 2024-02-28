@@ -1,0 +1,410 @@
+#!/usr/bin/env sh
+
+_lsrc_fail() {
+  export _lsrc_err="${1:-$_lsrc_action failed}"
+  export _lsrc_exit="${2:-1}"
+}
+
+export _lsrc_err=''
+export _lsrc_exit=0
+export _lsrc_action=load
+export _lsrc_verbose=0
+export _lsrc_profile="$HOME/.profile"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    load|unload|reload|install|defaults|opts|status|help)
+                   _lsrc_action="$1";;
+    profile)       _lsrc_action="profile"
+                   if [ "$2" != '' ]; then _lsrc_profle="$2"; shift; fi;;
+    --verbose|-v)  _lsrc_verbose=1;;
+    --help|-h)     _lsrc_action='help';;
+    *)             _lsrc_action='help'
+                   _lsrc_fail "Unknown option: $1"
+                   break;;
+  esac
+  shift
+done
+
+_lsrc_log() {
+  [ "$_lsrc_verbose" -eq 0 ] && return
+  for arg in "$@"; do
+    echo "$arg" | sed -e 's/^/lsrc: /' >&2
+  done
+}
+
+_lsrc_eval() { return 1; }
+export _lsrc_source="$0"
+if [ -n "$ZSH_VERSION" ]; then
+  case "$ZSH_EVAL_CONTEXT" in *:file) _lsrc_eval() { return 0; }; ;; esac
+  _lsrc_source="${(%):-%x}"
+elif [ -n "$BASH_VERSION" ]; then
+  if (return 0 2>/dev/null); then  _lsrc_eval() { return 0; }; fi
+  _lsrc_source="${BASH_SOURCE[0]}"
+else
+  echo "Unsupported shell. Please use bash or zsh" >&2
+  sleep 5 # If we're sourced (no way to tell) give the user time to see mesage
+  exit 1
+fi
+
+_lsrc_log "action: $_lsrc_action"
+_lsrc_log "eval: $_lsrc_eval"
+_lsrc_log "source: $_lsrc_source"
+
+export _lsrc_url="https://githubraw.com/kilna/lsrc/main/install.sh"
+export _lsrc_script="$(realpath "$_lsrc_source")" # Canonical script location
+export _lsrc_path="$(echo "$_lsrc_script" | sed -e "s;^$HOME/;~/;")" # Pretty
+
+_lsrc_log "script: $_lsrc_script"
+_lsrc_log "path: $_lsrc_path"
+
+_lsrc_help() {
+  found=0
+  while IFS='' read line; do
+    [ "$found" -eq 1 ] && echo "$line"
+    [ "$line" = '__USAGE__' ] && found=1
+  done < "$_lsrc_script"
+  unset found
+}
+
+_lsrc_status() {
+  if typeset -pf ls >/dev/null 2>&1; then
+    echo "ls function override is loaded"
+  else
+    echo "ls function override is not loaded"
+  fi
+  if typeset -pf lsrc >/dev/null 2>&1; then
+    echo "lsrc shell extension function is loaded"
+  else
+    echo "lsrc shell extension function is not loaded"
+  fi
+}
+
+_lsrc_warn() {
+  echo '# If you are seeing this then you probably meant to eval this like so:'
+  echo '# eval "$(lsrc '$_lsrc_action')"'
+}
+
+_lsrc_load() {
+  # Load the ls function into the shell
+  _lsrc_warn
+  cat <<'EOF'
+
+lsrc() { . "${LSRC_BIN:-$HOME/.local/bin}/lsrc" "$@"; };
+
+# Use gls instead of ls if available
+_lsrc_ls=/bin/ls
+if gls >/dev/null 2>&1; then ls=gls; done
+
+if [ "$($_lsrc_ls --version 2>/dev/null)" == *GNU*) ]; then
+  eval "ls() {
+    # Only use GNU ls options from $HOME/.lsrc in interactive shell
+    if [ -t 1 ]; then $_lsrc_ls $(lsrc opts) \"$@\"
+    else; /bin/ls \"$@\"; fi
+  };"
+else
+  echo "lsrc: \`ls\` is not GNU ls, skipping loading of ls function"
+fi
+
+unset _lsrc_ls
+
+EOF
+}
+
+_lsrc_unload() {
+  # Unload the ls and lsrc functions from the shell
+  cat <<'EOF'
+typeset -pf lsrc >/dev/null 2>&1 && unset -f lsrc
+typeset -pf ls   >/dev/null 2>&1 && unset -f ls
+EOF
+}
+
+_lsrc_reload() {
+  _lsrc_unload
+  _lsrc_load
+}
+
+_lsrc_add_profile() {
+  grep -xFq 'eval "$("$HOME/.local/bin/lsrc" load)"' "$1" && return
+  echo i    'eval "$("$HOME/.local/bin/lsrc" load)"' >>"$1"
+}
+
+_lsrc_defaults() {
+  cat <<'EOF'
+## Options for ls as provided by lsrc - Remove leading # to use
+
+# all off    ## ignore all entries starting with .
+# all on     ## show entries starting with . (-a option)
+# all almost ## show entries starting with . except implied . and .. (-A option)
+
+# author on ## print author in long listing (--author)
+
+# escape on ## print C-style escapes for nongraphic characters (-b)
+
+# block-size SIZE    ## See ls --help: 1M, 1G, 1KB, etc.
+
+# ignore-backups on ## Don't list entries ending with ~ (-B)
+
+# columns on ## List entries by columns (-C)
+
+# color auto   ## Only show color when stdout is connected to a terminal
+# color always ## Always show color
+# color never  ## Never show color
+
+# directory on ## List directories themselves, not their contents
+
+# dired on ## Generate output designed for Emacs' dired mode (-D)
+
+# directory-order on ## List all entries in directory order (-f)
+
+# indicator-style classify  ## append all indicators (*/=>@|) to entries (-F)
+# indicator-style file-type ## Same without * for executable files (--file-type)
+# indicator-style slash     ## Same but / for directories only (-p)
+
+# format across        ## (-x)
+# format horizontal    ## (-x)
+# format commas        ## (-m)
+# format long          ## (-l)
+# format verbose       ## (-l)
+# format single-column ## (-1)
+
+# full-time off
+
+# no-owner on ## Don't show owner in long listing (-g)
+# no-group on ## Don't show group in long listing (-G)
+
+# group-directories-first on ## Group directories before files, see ls --help
+
+# human-readable on ## Print sizes as human readable (-h)
+# human-readable si ## Same but use si base-1000 units (--si)
+
+# dereference-command-line on ## follow symbolic links (-H)
+# dereference-command-line-symlink-to-dir on ## Follow directory symbolic links
+
+# hide PATTERN ## Don't list entries matching PATTERN, overridden by 'all' above
+
+# hyperlink auto   ## Only show link when stdout is connected to a terminal
+# hyperlink always ## Always show link
+# hyperlink never  ## Never show link
+
+# inode on ## Print inode number (-i)
+
+# ignore PATTERN ## Do not list entries matching PATTERN
+
+# kibibytes on ## Use 1024 byte blocks (-k)
+
+# long on ## Long listing format
+
+# dereference on ## Show information for symbolic links rather than targets (-L)
+
+# numeric-uid-gid on ## Show UID and GID numbers in instead of names (-n)
+
+# control-chars hide ## Print nongraphic control characters as ? (-q)
+# control-chars show ## Show nongraphic control characters
+
+# quote-name on ## Enclose entry names in double quotes (-Q)
+
+# quoting-style literal (-N)
+# quoting-style locale
+# quoting-style shell
+# quoting-style shell-always
+# quoting-style shell-escape-always
+# quoting-style c
+# quoting-style escape
+
+# reverse on ## Output entries in reverse order (-r)
+
+# recursive on ## List subirectories recursively (-R)
+
+# size on ## Print the size of each file in blocks (-s)
+
+# sort size      ## (-S)
+# sort time      ## (-t)
+# sort version   ## (-v)
+# sort extension ## (-X)
+
+# time atime    ## Display or sort by access time (-u)
+# time ctime    ## Display or sort by metadata change time (-c)
+# time mtime    ## Display or sort by modified time
+# time creation ## Display or sort by creation/birth time
+
+# time-style TIME_STYLE ## See ls --help
+
+# tabsize COLS ## Assume tab stops at each COLS instead of 8
+
+# width COLS ## Set output width to COLS, 0 is no limit (-w)
+
+# context on ## Print any security context of each file
+
+# zero on ## Output NULs instead of newlines
+
+EOF
+}
+
+_lsrc_config() {
+  _lsrc_defaults
+  if ! [ -r "$HOME/.config/lsrc/lsrc.cfg" || -r "$HOME/.lsrc"
+    echo "Unable to load $HOME/.config/lsrc/lsrc.cfg nor" >&2
+    echo "  $HOME/.lsrc ... you probably want to do an lsrc install again" >&2
+    return 1
+  fi
+  cat $HOME/.config/lsrc/lsrc.cfg 2>/dev/null || true
+  cat $HOME/.lsrc                 2>/dev/null || true
+}
+
+_lsrc_on() {
+  [ "$2" == 'on' ] && return 0
+  [ "$2" == 'off' ] && return 1
+  echo "Unknown value '$2' for lsrc configuration '$1'" >&2
+  return 1; # Default to off
+}
+
+_lsrc_opts() {
+  while IFS='' read -r line; do
+    set -- $line
+    local flags=''
+    case "$1" in
+      all)
+        case "$1" in
+          off)    :;;
+          on)     flags="${flag}a";;
+          almost) flags="${flag}A";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      human-readible)
+        case "$1" in
+          off) :;;
+          on)  flags="${flag}";;
+          si)  echo ' --si';;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      control-characters)
+        case "$1" in
+          hide)  flags="${flag}w";;
+          show)  echo ' --show-control-chars';;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      sort)
+        case "$1" in
+          size)      flags="${flag}S";;
+          time)      flags="${flag}t";;
+          version)   flags="${flag}v";;
+          extension) flags="${flag}X";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      time)
+        case "$2" in
+          atime|acces|use)    flags="${flags}u";;
+          ctime|status)       flags="${flags}c";;
+          mtime|modification) flags="${flags}m";;
+          birth|creation)     echo " --time=$2";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      color|hyperlink)
+        case "$2" in
+          always|never|auto) echo " --$1=$2";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      format)
+        case "$2" in
+          across|horizontal) _flags="${flags}x";;
+          long|verbose)      _flags="${flags}l";;
+          single-column)     _flags="${flags}1";;
+          vertical)          _flags="${flags}C";;
+          commas)            _flags="${flags}m";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      tabsize|width)
+        case "$2" in
+          [0-9]+) echo " --$1=$2";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      block-size)
+        case "$2" in
+          [KMGTPEZYRQ][i]?[B]?) echo " --$1=$2";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      indicator-style)
+        case "$2" in
+          none)      :;;
+          slash)     _flags="${flags}p";;
+          file-type) _flags="${flags}p";;
+          classify)  _flags="${flags}F";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      quoting-style)
+        case "$2" in
+          literal|locale|shell|shell-always|shell-escape|shell-escape-always|c|escape)
+            echo " --$1=$2";;
+          *) echo "Unknown value '$2' for lsrc configuration '$1'";;
+        esac;;
+      hide|ignore|time-style)
+        echo " --$1='$2'";;
+      author|full-time|group-directories-first|dereference-command-line-symlink-to-dir|zero)
+        _lsrc_on "$@" && echo " --$1";;
+      escape)                   _lsrc_on "$@" && flags="${flags}b";;
+      ignore-backups)           _lsrc_on "$@" && flags="${flags}B";;
+      columns)                  _lsrc_on "$@" && flags="${flags}C";;
+      directory)                _lsrc_on "$@" && flags="${flags}d";;
+      dired)                    _lsrc_on "$@" && flags="${flags}D";;
+      directory-order)          _lsrc_on "$@" && flags="${flags}f";;
+      no-owner)                 _lsrc_on "$@" && flags="${flags}g";;
+      no-group)                 _lsrc_on "$@" && flags="${flags}G";;
+      dereference-command-line) _lsrc_on "$@" && flags="${flags}H";;
+      inode)                    _lsrc_on "$@" && flags="${flags}i";;
+      kibibytes)                _lsrc_on "$@" && flags="${flags}k";;
+      long)                     _lsrc_on "$@" && flags="${flags}l";;
+      dereference)              _lsrc_on "$@" && flags="${flags}L";;
+      numeric-uid-gid)          _lsrc_on "$@" && flags="${flags}n";;
+      literal)                  _lsrc_on "$@" && flags="${flags}N";;
+      quote-name)               _lsrc_on "$@" && flags="${flags}Q";;
+      reverse)                  _lsrc_on "$@" && flags="${flags}r";;
+      recursive)                _lsrc_on "$@" && flags="${flags}R";;
+      size)                     _lsrc_on "$@" && flags="${flags}s";;
+      context)                  _lsrc_on "$@" && flags="${flags}Z";;
+    esac
+    [ "$flags" != '' ] && echo echo " -$flags"
+  done < <(lsrc_config | sed -e 's/#.*//; s/\-+//')
+}
+
+case "$_lsrc_action" in
+  help)     _lsrc_help;;
+  install)  /bin/bash -c "$(curl -fsSL $_lsrc_url)";;
+  profile)  _lsrc_add_profile "$_lsrc_profile";;
+  defaults) _lsrc_defaults;;
+  opts)     _lsrc_opts;;
+  load)     if _lsrc_eval; then eval "$(_lsrc_load)"   || _lsrc_fail
+                           else _lsrc_load; fi;;
+  unload)   if _lsrc_eval; then eval "$(_lsrc_unload)" || _lsrc_fail
+                           else _lsrc_unload; fi;;
+  reload)   if _lsrc_eval; then eval "$(_lsrc_reload)" || _lsrc_fail
+                           else _lsrc_reload; fi;;
+  status)   _lsrc_status;;
+esac
+
+if _lsrc_eval; then
+  _lsrc_log "$(typeset -pf ls 2>/dev/null || echo 'no ls function')"
+  _lsrc_log "$(typeset -pf lsrc 2>/dev/null || echo 'no lsrc function')"
+  _lsrc_log "$(_lsrc_status)"
+fi
+
+[ -n "$_lsrc_err" ] && echo "lsrc error: $_lsrc_err" >&2
+
+_lsrc_eval || exit $_lsrc_exit
+
+[ "$_lsrc_exit" -gt 0 ] && lsrc_exit=$_lsrc_exit
+
+# Clean up all _lsrc functions
+funcs=($(typeset -pf | grep -e '^_lsrc.* ()' | sed -e 's/ ().*//'))
+for func in "${funcs[@]}"; do unset -f $func; done
+unset func funcs
+
+# Clean up all _lsrc vars
+vars=($( typeset -px|cut -f2- -d' '|sed -e 's/-x //; s/=.*//'|grep -e ^_lsrc ))
+for var in "${vars[@]}"; do unset $var; done
+unset var vars
+
+return ${lsrc_exit:-0}
+
+# Usage is appended below by install.sh from contents of Usage section
+# of README.md
+__USAGE__
